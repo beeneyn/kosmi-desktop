@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Kosmi Updater</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #2B244A; /* Kosmi dark purple background */
+            color: #EAEAEA; /* Light text color for contrast */
+            overflow: hidden;
+            -webkit-app-region: drag; /* Allows dragging the window */
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            height: 100%;
+        }
+
+        h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+            color: #fff;
+        }
+
+        p {
+            margin: 0 0 15px 0;
+            font-size: 14px;
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background-color: #1F1A36; /* Darker purple for the track */
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: #6C50F0; /* Kosmi vibrant purple for progress */
+            transition: width 0.2s ease-in-out;
+        }
+
+        .controls {
+            margin-top: 15px;
+            text-align: right;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px; /* More rounded corners to match style */
+            background-color: #6C50F0; /* Kosmi vibrant purple for the button */
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            -webkit-app-region: no-drag; /* Make button clickable */
+            transition: background-color 0.2s ease;
+        }
+
+        button:hover {
+            background-color: #5A43D0; /* Slightly darker purple for hover */
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h3 id="title">Downloading Update</h3>
+        <p id="message">Please wait while we download the latest version...</p>
+        
+        <div id="progress-container" class="progress-bar-container">
+            <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        
+        <div class="controls">
+            <button id="restart-btn" class="hidden">Restart to Update</button>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const title = document.getElementById('title');
+        const message = document.getElementById('message');
+        const progressBar = document.getElementById('progress-bar');
+        const progressContainer = document.getElementById('progress-container');
+        const restartBtn = document.getElementById('restart-btn');
+
+        ipcRenderer.on('update-progress', (event, percent) => {
+            progressBar.style.width = percent + '%';
+            message.textContent = `Downloading... ${Math.round(percent)}%`;
+        });
+
+        ipcRenderer.on('update-downloaded', () => {
+            title.textContent = 'Update Ready';
+            message.textContent = 'The new version has been downloaded.';
+            progressContainer.classList.add('hidden');
+            restartBtn.classList.remove('hidden');
+        });
+
+        ipcRenderer.on('update-error', () => {
+            title.textContent = 'Update Failed';
+            message.textContent = 'Could not download the update. Please try again later.';
+            progressContainer.classList.add('hidden');
+        });
+
+        restartBtn.addEventListener('click', () => {
+            ipcRenderer.send('restart-app');
+        });
+    </script>
+</body>
+</html>
+

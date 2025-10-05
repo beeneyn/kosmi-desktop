@@ -1,0 +1,61 @@
+{
+  "name": "kosmi-desktop",
+  "version": "1.1.0",
+  "description": "Kosmi Desktop is an Electron-based application that brings the full Kosmi experience to your desktop. Join chatrooms, watch videos, play games, and listen to music with friends in a seamless and user-friendly interface.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish always"
+  },
+  "keywords": [
+    "Electron",
+    "Kosmi",
+    "Chatroom",
+    "Fun",
+    "Video",
+    "Games",
+    "Music"
+  ],
+  "author": "Kosmi Inc",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "discord-rich-presence": "^0.0.8",
+    "electron-store": "^11.0.0",
+    "electron-updater": "^6.6.2"
+  },
+  "build": {
+    "appId": "com.kosmi.desktop",
+    "productName": "Kosmi Desktop",
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "updater.html",
+      "about.html",
+      "assets/",
+      "node_modules/"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "beeneyn",
+      "repo": "kosmi-desktop",
+      "private": false
+    }
+  }
+}
