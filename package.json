@@ -1,6 +1,6 @@
 {
   "name": "kosmi-desktop",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Kosmi Desktop is an Electron-based application that brings the full Kosmi experience to your desktop. Join chatrooms, watch videos, play games, and listen to music with friends in a seamless and user-friendly interface.",
   "main": "main.js",
   "scripts": {

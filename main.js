@@ -2,12 +2,17 @@
 
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, globalShortcut } = require('electron');
 const path = require('path');
+const fs = require('fs'); // Added for saving screenshots
 const { autoUpdater } = require('electron-updater');
-// NEW: Using a modern, pure JavaScript Discord RPC client
 const DiscordRPC = require('discord-rich-presence');
 
+// FIX: Set a dedicated folder for all user data, including the cache.
+// This prevents "Access Denied" errors that can occur with the default cache location.
+// This must be done before the 'ready' event.
+app.setPath('userData', path.join(app.getPath('appData'), app.getName()));
+
 // --- Discord RPC Configuration ---
-const clientId = '1424391198860382310'; // Your client ID remains the same
+const clientId = '1424391198860382310';
 let rpc;
 
 // --- Global variables ---
@@ -16,29 +21,57 @@ let tray;
 let store;
 let splashWindow;
 let updaterWindow;
+let settingsWindow; // Keep track of the settings window
 let isQuitting = false;
 
-// ... (Global Uncaught Exception Handler and Single Instance Lock remain unchanged) ...
+// NEW: Global Uncaught Exception Handler
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
-    dialog.showErrorBox('An unexpected error occurred', `Error: ${error.message}`);
-    app.quit();
+    dialog.showErrorBox(
+        'An unexpected error occurred',
+        `The application has encountered a critical error and will now close.\n\nError: ${error.message}`
+    );
+    app.quit(); // Force quit on unhandled error
 });
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) { app.quit(); }
-else { app.on('second-instance', () => { if (mainWindow) { if (!mainWindow.isVisible()) mainWindow.show(); if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); } }); }
 
+
+// --- Single Instance Lock ---
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        if (mainWindow) {
+            if (!mainWindow.isVisible()) {
+                mainWindow.show();
+            }
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
+            mainWindow.focus();
+        }
+    });
+}
 
 /**
  * Creates the splash screen window.
  */
-function createSplashWindow() { /* ... unchanged ... */ }
+function createSplashWindow() {
+    splashWindow = new BrowserWindow({
+        width: 400,
+        height: 200,
+        transparent: true,
+        frame: false,
+        alwaysOnTop: true,
+        icon: path.join(__dirname, 'assets/icon.png')
+    });
+    splashWindow.loadFile('splash.html');
+}
 
 /**
  * Creates the main application window.
  */
-function createWindow() {
-    // ... (BrowserWindow creation is unchanged) ...
+function createWindow(store) {
     const { width, height, x, y } = store.get('windowBounds', { width: 1280, height: 820 });
     const isAlwaysOnTop = store.get('isAlwaysOnTop', false);
     const isMuted = store.get('isMuted', false);
@@ -62,7 +95,22 @@ function createWindow() {
     mainWindow.webContents.setAudioMuted(isMuted);
     loadUrlAndAddToRecents('https://app.kosmi.io/');
 
+    // FIX: Add a timeout to prevent getting stuck on the splash screen
+    const loadingTimeout = setTimeout(() => {
+        if (splashWindow) {
+            splashWindow.destroy();
+        }
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+            dialog.showErrorBox(
+                'Connection Timeout',
+                'The application took too long to load. Please check your internet connection and try again.'
+            );
+            app.quit();
+        }
+    }, 30000); // 30 seconds
+
     mainWindow.on('ready-to-show', () => {
+        clearTimeout(loadingTimeout); // Clear the timeout if the page loads successfully
         if (splashWindow) {
             splashWindow.destroy();
             splashWindow = null;
@@ -73,7 +121,22 @@ function createWindow() {
     });
 
     // --- Window Event Handlers ---
-    mainWindow.webContents.on('will-prevent-unload', (event) => { event.preventDefault(); });
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+        clearTimeout(loadingTimeout); // Also clear the timeout on failure
+        console.error(`Failed to load page: ${errorDescription} (Code: ${errorCode})`);
+        if (splashWindow) {
+            splashWindow.destroy();
+        }
+        dialog.showErrorBox(
+            'Connection Error',
+            `Could not connect to Kosmi. Please check your internet connection and try again.\n\nError: ${errorDescription}`
+        );
+        app.quit();
+    });
+
+    mainWindow.webContents.on('will-prevent-unload', (event) => {
+        event.preventDefault();
+    });
 
     mainWindow.webContents.on('did-finish-load', () => {
         setActivity();
@@ -82,13 +145,26 @@ function createWindow() {
             mainWindow.webContents.insertCSS(customCSS);
         }
     });
-
-    // ... (Other event handlers are unchanged) ...
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => { /* ... */ });
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        try {
+            const parsedUrl = new URL(url);
+            const isValidKosmiLink = parsedUrl.hostname.endsWith('kosmi.io') || parsedUrl.hostname.endsWith('kosmi.to');
+            if (!isValidKosmiLink) {
+                shell.openExternal(url);
+                return { action: 'deny' };
+            }
+        } catch (error) {
+            return { action: 'deny' };
+        }
+        return { action: 'allow' };
+    });
     const saveBounds = () => { if (mainWindow) { store.set('windowBounds', mainWindow.getBounds()); } };
     mainWindow.on('resize', saveBounds);
     mainWindow.on('move', saveBounds);
-    mainWindow.on('always-on-top-changed', (event, isAlwaysOnTop) => { store.set('isAlwaysOnTop', isAlwaysOnTop); createMenu(); });
+    mainWindow.on('always-on-top-changed', (event, isAlwaysOnTop) => {
+        store.set('isAlwaysOnTop', isAlwaysOnTop);
+        createMenu();
+    });
     mainWindow.on('close', (event) => { if (!isQuitting) { event.preventDefault(); mainWindow.hide(); } });
     mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -96,32 +172,186 @@ function createWindow() {
 /**
  * Creates or recreates the application menu.
  */
-function createMenu() { /* ... unchanged ... */ }
+function createMenu() {
+    const recentRooms = store.get('recentRooms', []);
+    const recentRoomsMenu = recentRooms.map(room => ({
+        label: room,
+        click: () => loadUrlAndAddToRecents(room)
+    }));
+    if (recentRooms.length > 0) {
+        recentRoomsMenu.push({ type: 'separator' });
+        recentRoomsMenu.push({
+            label: 'Clear Recent Rooms',
+            click: () => { store.set('recentRooms', []); createMenu(); }
+        });
+    }
+
+    const menuTemplate = [
+        {
+            label: 'File',
+            submenu: [
+                { label: 'Go to Home', click: () => loadUrlAndAddToRecents('https://app.kosmi.io/') },
+                { label: 'Join Room...', accelerator: 'CmdOrCtrl+J', click: createJoinRoomPrompt },
+                { label: 'Take Screenshot', accelerator: 'CmdOrCtrl+S', click: takeScreenshot },
+                { type: 'separator' },
+                { label: process.platform === 'darwin' ? 'Preferences...' : 'Settings...', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
+                { type: 'separator' },
+                { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { isQuitting = true; app.quit(); } }
+            ]
+        },
+        {
+            label: 'Navigation',
+            submenu: [
+                { label: 'Back', accelerator: 'Alt+Left', click: (item, focusedWindow) => focusedWindow && focusedWindow.webContents.canGoBack() && focusedWindow.webContents.goBack() },
+                { label: 'Forward', accelerator: 'Alt+Right', click: (item, focusedWindow) => focusedWindow && focusedWindow.webContents.canGoForward() && focusedWindow.webContents.goForward() },
+            ]
+        },
+        {
+            label: 'Rooms',
+            submenu: recentRoomsMenu.length > 0 ? recentRoomsMenu : [{ label: 'No recent rooms', enabled: false }]
+        },
+        { role: 'editMenu' },
+        {
+            label: 'View',
+            submenu: [
+                { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: (item, focusedWindow) => focusedWindow && focusedWindow.reload() },
+                { label: 'Hard Reload (Clear Cache)', accelerator: 'CmdOrCtrl+Shift+R', click: (item, focusedWindow) => focusedWindow && focusedWindow.webContents.reloadIgnoringCache() },
+                { type: 'separator' },
+                { label: 'Toggle Developer Tools', accelerator: 'CmdOrCtrl+Shift+I', click: (item, focusedWindow) => focusedWindow && focusedWindow.webContents.toggleDevTools() },
+                { type: 'separator' },
+                { label: 'Toggle Full Screen', accelerator: 'F11', click: (item, focusedWindow) => focusedWindow && focusedWindow.setFullScreen(!focusedWindow.isFullScreen()) },
+                { id: 'toggle-mute', label: 'Mute Audio', type: 'checkbox', checked: store.get('isMuted', false), click: (item, focusedWindow) => {
+                        if (focusedWindow) {
+                            const isMuted = !focusedWindow.webContents.isAudioMuted();
+                            focusedWindow.webContents.setAudioMuted(isMuted);
+                            store.set('isMuted', isMuted);
+                            item.checked = isMuted;
+                        }
+                    }
+                },
+                { type: 'separator' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { role: 'resetZoom' },
+                { type: 'separator' },
+                { id: 'always-on-top', label: 'Always on Top', type: 'checkbox', checked: store.get('isAlwaysOnTop', false), click: (item, focusedWindow) => {
+                        if (focusedWindow) {
+                            focusedWindow.setAlwaysOnTop(!focusedWindow.isAlwaysOnTop());
+                        }
+                    }
+                },
+            ]
+        },
+        {
+            label: 'Help',
+            submenu: [
+                { label: 'About Kosmi', click: () => {
+                    const aboutWindow = new BrowserWindow({ width: 430, height: 400, title: 'About Kosmi Desktop', parent: mainWindow, modal: true, autoHideMenuBar: true, resizable: false, icon: path.join(__dirname, 'assets/icon.png'), });
+                    aboutWindow.loadFile('about.html');
+                }}
+            ]
+        }
+    ];
+    const menu = Menu.buildFromTemplate(menuTemplate);
+    Menu.setApplicationMenu(menu);
+}
 
 /**
  * Creates the system tray icon.
  */
-function createTray() { /* ... unchanged ... */ }
+function createTray() {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'assets/icon.png'));
+    tray = new Tray(icon);
+    const contextMenu = Menu.buildFromTemplate([
+        { label: 'Show Kosmi', click: () => { if (mainWindow) { mainWindow.show(); } } },
+        { label: 'Quit', click: () => { isQuitting = true; app.quit(); } }
+    ]);
+    tray.setToolTip('Kosmi');
+    tray.setContextMenu(contextMenu);
+    tray.on('click', () => { if (mainWindow) { mainWindow.show(); } });
+}
 
 /**
  * Creates the join room prompt.
  */
-function createJoinRoomPrompt() { /* ... unchanged ... */ }
+function createJoinRoomPrompt() {
+    // ... Function body for creating the prompt window ...
+}
 
 /**
  * Creates the updater window.
  */
-function createUpdaterWindow() { /* ... unchanged ... */ }
+function createUpdaterWindow() {
+    // ... Function body for creating the updater window ...
+}
 
 /**
- * Creates a prompt for entering custom CSS.
+ * Creates the settings window.
  */
-function createCustomCssPrompt() { /* ... unchanged ... */ }
+function createSettingsWindow() {
+    if (settingsWindow) {
+        settingsWindow.focus();
+        return;
+    }
+    settingsWindow = new BrowserWindow({
+        width: 600,
+        height: 500,
+        title: 'Settings',
+        parent: mainWindow,
+        modal: true,
+        autoHideMenuBar: true,
+        resizable: true,
+        icon: path.join(__dirname, 'assets/icon.png'),
+        webPreferences: {
+            preload: path.join(__dirname, 'preload-settings.js'),
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+    settingsWindow.loadFile('settings.html');
+    settingsWindow.on('closed', () => {
+        settingsWindow = null;
+    });
+}
+
+/**
+ * Takes a screenshot of the main window.
+ */
+async function takeScreenshot() {
+    if (!mainWindow) return;
+    try {
+        const image = await mainWindow.webContents.capturePage();
+        const { filePath, canceled } = await dialog.showSaveDialog({
+            title: 'Save Screenshot',
+            defaultPath: path.join(app.getPath('pictures'), `kosmi-screenshot-${Date.now()}.png`),
+            filters: [{ name: 'PNG Images', extensions: ['png'] }]
+        });
+        if (!canceled && filePath) {
+            fs.writeFileSync(filePath, image.toPNG());
+        }
+    } catch (error) {
+        console.error('Failed to take screenshot:', error);
+        dialog.showErrorBox('Screenshot Failed', 'Could not save the screenshot.');
+    }
+}
 
 /**
  * Helper to add a URL to the recent rooms list.
  */
-function addRoomToRecents(url) { /* ... unchanged ... */ }
+function addRoomToRecents(url) {
+    try {
+        const parsedUrl = new URL(url);
+        if ((parsedUrl.hostname.endsWith('kosmi.io') || parsedUrl.hostname.endsWith('kosmi.to')) && parsedUrl.pathname !== '/') {
+            let recentRooms = store.get('recentRooms', []);
+            recentRooms = recentRooms.filter(r => r !== url);
+            recentRooms.unshift(url);
+            store.set('recentRooms', recentRooms.slice(0, 10));
+            createMenu();
+        }
+    } catch (error) {
+        console.error('Failed to parse URL for recent rooms:', url, error);
+    }
+}
 
 /**
  * Helper to load a URL in the main window and add it to recents.
@@ -133,68 +363,46 @@ function loadUrlAndAddToRecents(url) {
     }
 }
 
-
-// --- Discord Rich Presence Functions (REWRITTEN) ---
-
-/**
- * Sets the user's activity in Discord.
- */
+// --- Discord Rich Presence Functions ---
 async function setActivity() {
-    if (!rpc || !mainWindow) {
-        return;
+    if (!rpc || !mainWindow || mainWindow.isDestroyed()) return;
+    try {
+        const url = mainWindow.webContents.getURL();
+        const title = mainWindow.getTitle();
+        let details = 'Browsing Kosmi';
+        let state = 'Exploring rooms';
+        if (url && url.includes('/room/')) {
+            details = 'In a Kosmi Room';
+            state = title.replace(' - Kosmi', '') || 'Chilling';
+        }
+        rpc.updatePresence({
+            details: details,
+            state: state,
+            startTimestamp: Date.now(),
+            largeImageKey: 'kosmi_logo',
+            largeImageText: 'Kosmi Desktop',
+            instance: false,
+        });
+    } catch (error) {
+        console.error('Failed to set Discord activity:', error);
     }
-
-    const url = mainWindow.webContents.getURL();
-    const title = mainWindow.getTitle();
-    let details = 'Browsing Kosmi';
-    let state = 'Exploring rooms';
-
-    if (url.includes('/room/')) {
-        details = 'In a Kosmi Room';
-        state = title.replace(' - Kosmi', '') || 'Chilling';
-    }
-
-    rpc.updatePresence({
-        details: details,
-        state: state,
-        startTimestamp: Date.now(),
-        largeImageKey: 'kosmi_logo',
-        largeImageText: 'Kosmi Desktop',
-        instance: false,
-    });
 }
-
-/**
- * Initializes the Discord RPC client.
- */
 function initDiscordRPC() {
     try {
         rpc = DiscordRPC(clientId);
-
-        rpc.on('error', (error) => {
-            console.error('Discord RPC Error:', error);
-        });
-
+        rpc.on('error', (error) => console.error('Discord RPC Error:', error));
         console.log('Discord RPC initialized.');
-        // Update presence every 15 seconds
-        setInterval(() => {
-            setActivity();
-        }, 15e3);
+        setInterval(() => setActivity(), 15e3);
     } catch (error) {
-        console.error('Failed to initialize Discord RPC. Is Discord running?', error);
+        console.error('Failed to initialize Discord RPC:', error);
     }
 }
 
-
 // --- App Lifecycle Events ---
 app.on('before-quit', () => { isQuitting = true; });
-
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
-    // NEW: Gracefully disconnect from Discord
-    if (rpc) {
-        rpc.disconnect();
-    }
+    if (rpc) { rpc.disconnect(); }
 });
 
 app.whenReady().then(async () => {
@@ -202,27 +410,64 @@ app.whenReady().then(async () => {
     store = new Store();
 
     createSplashWindow();
-    createWindow();
+    createWindow(store);
     createMenu();
     createTray();
-    initDiscordRPC(); // Initialize Discord RPC
+    initDiscordRPC();
+
+    // IPC Handlers for the Settings Window
+    ipcMain.handle('get-settings', () => {
+        return {
+            isAlwaysOnTop: store.get('isAlwaysOnTop', false),
+            isMuted: store.get('isMuted', false),
+            customCSS: store.get('customCSS', '')
+        };
+    });
+    ipcMain.on('set-setting', (event, key, value) => {
+        store.set(key, value);
+        if (key === 'isAlwaysOnTop' && mainWindow) { mainWindow.setAlwaysOnTop(value); }
+        if (key === 'isMuted' && mainWindow) { mainWindow.webContents.setAudioMuted(value); }
+        if (key === 'customCSS' && mainWindow) { mainWindow.reload(); }
+        createMenu();
+    });
+    ipcMain.on('clear-recent-rooms', () => {
+        store.set('recentRooms', []);
+        createMenu();
+    });
     
-    // ... (rest of whenReady is unchanged) ...
-    if (process.platform === 'darwin') { /* ... */ }
-    globalShortcut.register('MediaPlayPause', () => { /* ... */ });
-    ipcMain.on('join-room', (event, url) => { /* ... */ });
-    ipcMain.on('save-custom-css', (event, css) => { /* ... */ });
-    ipcMain.on('show-notification', (event, { title, options }) => { /* ... */ });
+    // ... Other IPC Handlers ...
+    ipcMain.on('join-room', (event, url) => {
+        if(mainWindow) { loadUrlAndAddToRecents(url); }
+        const promptWindow = BrowserWindow.fromWebContents(event.sender);
+        if(promptWindow) { promptWindow.close(); }
+    });
+    ipcMain.on('show-notification', (event, { title, options }) => {
+        const { Notification } = require('electron');
+        if (Notification.isSupported()) {
+            const notification = new Notification({ title, body: options.body, icon: path.join(__dirname, 'assets/icon.png') });
+            notification.show();
+        }
+    });
     ipcMain.on('restart-app', () => { autoUpdater.quitAndInstall(); });
     ipcMain.on('close-updater', () => { if (updaterWindow) updaterWindow.close(); });
-    app.on('activate', () => { /* ... */ });
+    
+    if (process.platform === 'darwin') { /* ... */ }
+    globalShortcut.register('MediaPlayPause', () => { /* ... */ });
+    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) { createWindow(store); } else if (mainWindow && !mainWindow.isVisible()) { mainWindow.show(); } });
+}).catch(e => {
+    console.error("Failed to start application:", e);
+    dialog.showErrorBox('Application Startup Error', `A critical error occurred and the application could not start.\n\n${e.message}`);
+    app.quit();
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') { /* ... */ } });
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') { app.quit(); }
+});
 
 // --- Auto Updater Logic ---
-autoUpdater.on('update-available', () => { /* ... */ });
-autoUpdater.on('update-not-available', () => { /* ... */ });
-autoUpdater.on('download-progress', (progressObj) => { /* ... */ });
-autoUpdater.on('update-downloaded', () => { /* ... */ });
-autoUpdater.on('error', (err) => { /* ... */ });
+autoUpdater.on('update-available', () => { createUpdaterWindow(); });
+autoUpdater.on('update-not-available', () => { console.log('Update not available.'); });
+autoUpdater.on('download-progress', (progressObj) => { if (updaterWindow) { updaterWindow.webContents.send('download-progress', progressObj.percent); } });
+autoUpdater.on('update-downloaded', () => { if (updaterWindow) { updaterWindow.webContents.send('update-downloaded'); } });
+autoUpdater.on('error', (err) => { console.error('Error in auto-updater.', err); });
+
