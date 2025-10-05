@@ -6,7 +6,7 @@ on:
   release:
     types: [created]
 
-# This is the new section that grants the workflow permission to upload files to your release.
+# This grants the workflow permission to upload files to your release.
 permissions:
   contents: write
 
@@ -31,9 +31,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build/release Electron app
-        # This step will build the app and, with the added permissions,
-        # will now be able to successfully publish it to the release.
-        run: npm run dist
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build application
+        # We add '--publish never' to prevent electron-builder from trying to publish.
+        # The upload will be handled by a separate, more reliable step.
+        run: npm run dist -- --publish never
+
+      - name: Upload Release Assets
+        # This action will find the built installers in the 'dist' folder
+        # and upload them to the GitHub release that triggered this workflow.
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/*
+          tag: ${{ github.ref_name }}
+          overwrite: true
+          file_glob: true
