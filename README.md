@@ -63,5 +63,5 @@ Run the application:
 
     npm start
 
-License
+## License
 This project is licensed under the MIT License. See the [LICENSE](https://github.com/beeneyn/kosmi-desktop/blob/main/LICENSE) file for details.
