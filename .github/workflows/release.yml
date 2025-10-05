@@ -6,6 +6,10 @@ on:
   release:
     types: [created]
 
+# This is the new section that grants the workflow permission to upload files to your release.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -28,8 +32,8 @@ jobs:
         run: npm install
 
       - name: Build/release Electron app
-        # This step will build the app without signing it.
-        # The GH_TOKEN is provided by GitHub Actions automatically.
+        # This step will build the app and, with the added permissions,
+        # will now be able to successfully publish it to the release.
         run: npm run dist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
