@@ -2,18 +2,16 @@
 
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, globalShortcut } = require('electron');
 const path = require('path');
-const fs = require('fs'); // Added for saving screenshots
+const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const DiscordRPC = require('discord-rich-presence');
 
-// FIX: Set a dedicated folder for all user data, including the cache.
-// This prevents "Access Denied" errors that can occur with the default cache location.
-// This must be done before the 'ready' event.
 app.setPath('userData', path.join(app.getPath('appData'), app.getName()));
 
 // --- Discord RPC Configuration ---
 const clientId = '1424391198860382310';
 let rpc;
+let activityTimestamp; // To hold the start time of the activity
 
 // --- Global variables ---
 let mainWindow;
@@ -21,37 +19,18 @@ let tray;
 let store;
 let splashWindow;
 let updaterWindow;
-let settingsWindow; // Keep track of the settings window
+let settingsWindow;
 let isQuitting = false;
 
-// NEW: Global Uncaught Exception Handler
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
-    dialog.showErrorBox(
-        'An unexpected error occurred',
-        `The application has encountered a critical error and will now close.\n\nError: ${error.message}`
-    );
-    app.quit(); // Force quit on unhandled error
+    dialog.showErrorBox('An unexpected error occurred', `Error: ${error.message}`);
+    app.quit();
 });
 
-
-// --- Single Instance Lock ---
 const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-    app.quit();
-} else {
-    app.on('second-instance', (event, commandLine, workingDirectory) => {
-        if (mainWindow) {
-            if (!mainWindow.isVisible()) {
-                mainWindow.show();
-            }
-            if (mainWindow.isMinimized()) {
-                mainWindow.restore();
-            }
-            mainWindow.focus();
-        }
-    });
-}
+if (!gotTheLock) { app.quit(); }
+else { app.on('second-instance', () => { if (mainWindow) { if (!mainWindow.isVisible()) mainWindow.show(); if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); } }); }
 
 /**
  * Creates the splash screen window.
@@ -95,22 +74,16 @@ function createWindow(store) {
     mainWindow.webContents.setAudioMuted(isMuted);
     loadUrlAndAddToRecents('https://app.kosmi.io/');
 
-    // FIX: Add a timeout to prevent getting stuck on the splash screen
     const loadingTimeout = setTimeout(() => {
-        if (splashWindow) {
-            splashWindow.destroy();
-        }
+        if (splashWindow) { splashWindow.destroy(); }
         if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-            dialog.showErrorBox(
-                'Connection Timeout',
-                'The application took too long to load. Please check your internet connection and try again.'
-            );
+            dialog.showErrorBox('Connection Timeout', 'The application took too long to load. Please check your internet connection and try again.');
             app.quit();
         }
-    }, 30000); // 30 seconds
+    }, 30000);
 
     mainWindow.on('ready-to-show', () => {
-        clearTimeout(loadingTimeout); // Clear the timeout if the page loads successfully
+        clearTimeout(loadingTimeout);
         if (splashWindow) {
             splashWindow.destroy();
             splashWindow = null;
@@ -122,21 +95,14 @@ function createWindow(store) {
 
     // --- Window Event Handlers ---
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-        clearTimeout(loadingTimeout); // Also clear the timeout on failure
+        clearTimeout(loadingTimeout);
         console.error(`Failed to load page: ${errorDescription} (Code: ${errorCode})`);
-        if (splashWindow) {
-            splashWindow.destroy();
-        }
-        dialog.showErrorBox(
-            'Connection Error',
-            `Could not connect to Kosmi. Please check your internet connection and try again.\n\nError: ${errorDescription}`
-        );
+        if (splashWindow) { splashWindow.destroy(); }
+        dialog.showErrorBox('Connection Error', `Could not connect to Kosmi. Please check your internet connection and try again.\n\nError: ${errorDescription}`);
         app.quit();
     });
 
-    mainWindow.webContents.on('will-prevent-unload', (event) => {
-        event.preventDefault();
-    });
+    mainWindow.webContents.on('will-prevent-unload', (event) => { event.preventDefault(); });
 
     mainWindow.webContents.on('did-finish-load', () => {
         setActivity();
@@ -145,6 +111,7 @@ function createWindow(store) {
             mainWindow.webContents.insertCSS(customCSS);
         }
     });
+
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         try {
             const parsedUrl = new URL(url);
@@ -161,10 +128,7 @@ function createWindow(store) {
     const saveBounds = () => { if (mainWindow) { store.set('windowBounds', mainWindow.getBounds()); } };
     mainWindow.on('resize', saveBounds);
     mainWindow.on('move', saveBounds);
-    mainWindow.on('always-on-top-changed', (event, isAlwaysOnTop) => {
-        store.set('isAlwaysOnTop', isAlwaysOnTop);
-        createMenu();
-    });
+    mainWindow.on('always-on-top-changed', (event, isAlwaysOnTop) => { store.set('isAlwaysOnTop', isAlwaysOnTop); createMenu(); });
     mainWindow.on('close', (event) => { if (!isQuitting) { event.preventDefault(); mainWindow.hide(); } });
     mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -275,14 +239,82 @@ function createTray() {
  * Creates the join room prompt.
  */
 function createJoinRoomPrompt() {
-    // ... Function body for creating the prompt window ...
+    const joinRoomWindow = new BrowserWindow({
+        width: 450,
+        height: 160,
+        title: 'Join Room',
+        parent: mainWindow,
+        modal: true,
+        autoHideMenuBar: true,
+        resizable: false,
+        icon: path.join(__dirname, 'assets/icon.png'),
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+            sandbox: false
+        }
+    });
+
+    const promptHtmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Join Room</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background-color: #2a2139; color: #fff; overflow: hidden; }
+                label { display: block; margin-bottom: 8px; font-size: 14px; }
+                input { width: 100%; padding: 8px; box-sizing: border-box; border-radius: 8px; border: 1px solid #4f3c7a; background-color: #3c2d5c; color: #fff; font-size: 14px; }
+                input:focus { outline: none; border-color: #7e57c2; }
+                div { margin-top: 15px; text-align: right; }
+                button { padding: 8px 16px; border: none; border-radius: 8px; background-color: #7e57c2; color: white; cursor: pointer; font-size: 14px; font-weight: bold; }
+                button:hover { background-color: #6a48a0; }
+            </style>
+        </head>
+        <body>
+            <label for="room-url">Enter Kosmi room invite link:</label>
+            <input type="url" id="room-url" autofocus />
+            <div>
+                <button id="join-btn">Join</button>
+            </div>
+            <script>
+                const { ipcRenderer } = require('electron');
+                const urlInput = document.getElementById('room-url');
+                const joinBtn = document.getElementById('join-btn');
+                function submitUrl() {
+                    const url = urlInput.value;
+                    if (url) { ipcRenderer.send('join-room', url); }
+                }
+                joinBtn.addEventListener('click', submitUrl);
+                urlInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') { submitUrl(); }
+                    if (event.key === 'Escape') { window.close(); }
+                });
+            </script>
+        </body>
+        </html>
+    `;
+    joinRoomWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(promptHtmlContent)}`);
 }
 
 /**
  * Creates the updater window.
  */
 function createUpdaterWindow() {
-    // ... Function body for creating the updater window ...
+    updaterWindow = new BrowserWindow({
+        width: 400,
+        height: 150,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        icon: path.join(__dirname, 'assets/icon.png'),
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
+    updaterWindow.loadFile('updater.html');
+    updaterWindow.on('closed', () => { updaterWindow = null; });
 }
 
 /**
@@ -363,9 +395,16 @@ function loadUrlAndAddToRecents(url) {
     }
 }
 
-// --- Discord Rich Presence Functions ---
+// --- Discord Rich Presence Functions (RE-FIXED) ---
+
+/**
+ * Sets the user's activity in Discord.
+ */
 async function setActivity() {
-    if (!rpc || !mainWindow || mainWindow.isDestroyed()) return;
+    if (!rpc || !mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+
     try {
         const url = mainWindow.webContents.getURL();
         const title = mainWindow.getTitle();
@@ -375,10 +414,11 @@ async function setActivity() {
             details = 'In a Kosmi Room';
             state = title.replace(' - Kosmi', '') || 'Chilling';
         }
+
         rpc.updatePresence({
             details: details,
             state: state,
-            startTimestamp: Date.now(),
+            startTimestamp: activityTimestamp, // Use the persistent timestamp
             largeImageKey: 'kosmi_logo',
             largeImageText: 'Kosmi Desktop',
             instance: false,
@@ -387,14 +427,31 @@ async function setActivity() {
         console.error('Failed to set Discord activity:', error);
     }
 }
+
+/**
+ * Initializes the Discord RPC client.
+ */
 function initDiscordRPC() {
     try {
+        // FIX: Set the timestamp ONCE when the RPC client is initialized for the session.
+        activityTimestamp = Date.now();
         rpc = DiscordRPC(clientId);
-        rpc.on('error', (error) => console.error('Discord RPC Error:', error));
-        console.log('Discord RPC initialized.');
-        setInterval(() => setActivity(), 15e3);
+
+        rpc.on('error', (error) => {
+            console.error('Discord RPC Error:', error);
+        });
+
+        rpc.on('ready', () => {
+            console.log('Discord RPC connected.');
+            setActivity(); // Set initial activity
+        });
+        
+        // Update presence every 15 seconds
+        setInterval(() => {
+            setActivity();
+        }, 15e3);
     } catch (error) {
-        console.error('Failed to initialize Discord RPC:', error);
+        console.error('Failed to initialize Discord RPC. Is Discord running?', error);
     }
 }
 
@@ -415,14 +472,12 @@ app.whenReady().then(async () => {
     createTray();
     initDiscordRPC();
 
-    // IPC Handlers for the Settings Window
-    ipcMain.handle('get-settings', () => {
-        return {
-            isAlwaysOnTop: store.get('isAlwaysOnTop', false),
-            isMuted: store.get('isMuted', false),
-            customCSS: store.get('customCSS', '')
-        };
-    });
+    // IPC Handlers
+    ipcMain.handle('get-settings', () => ({
+        isAlwaysOnTop: store.get('isAlwaysOnTop', false),
+        isMuted: store.get('isMuted', false),
+        customCSS: store.get('customCSS', '')
+    }));
     ipcMain.on('set-setting', (event, key, value) => {
         store.set(key, value);
         if (key === 'isAlwaysOnTop' && mainWindow) { mainWindow.setAlwaysOnTop(value); }
@@ -430,12 +485,7 @@ app.whenReady().then(async () => {
         if (key === 'customCSS' && mainWindow) { mainWindow.reload(); }
         createMenu();
     });
-    ipcMain.on('clear-recent-rooms', () => {
-        store.set('recentRooms', []);
-        createMenu();
-    });
-    
-    // ... Other IPC Handlers ...
+    ipcMain.on('clear-recent-rooms', () => { store.set('recentRooms', []); createMenu(); });
     ipcMain.on('join-room', (event, url) => {
         if(mainWindow) { loadUrlAndAddToRecents(url); }
         const promptWindow = BrowserWindow.fromWebContents(event.sender);
@@ -451,8 +501,20 @@ app.whenReady().then(async () => {
     ipcMain.on('restart-app', () => { autoUpdater.quitAndInstall(); });
     ipcMain.on('close-updater', () => { if (updaterWindow) updaterWindow.close(); });
     
-    if (process.platform === 'darwin') { /* ... */ }
-    globalShortcut.register('MediaPlayPause', () => { /* ... */ });
+    if (process.platform === 'darwin') {
+        app.dock.setMenu(Menu.buildFromTemplate([
+            { label: 'Go to Home', click: () => { if (mainWindow) { mainWindow.show(); loadUrlAndAddToRecents('https://app.kosmi.io/'); } } },
+            { label: 'Join Room...', click: createJoinRoomPrompt },
+        ]));
+    }
+    globalShortcut.register('MediaPlayPause', () => {
+        if (mainWindow) {
+            mainWindow.webContents.executeJavaScript(`
+                const video = document.querySelector('video');
+                if (video) { video.paused ? video.play() : video.pause(); }
+            `).catch(err => console.error('Could not execute media key script:', err));
+        }
+    });
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) { createWindow(store); } else if (mainWindow && !mainWindow.isVisible()) { mainWindow.show(); } });
 }).catch(e => {
     console.error("Failed to start application:", e);

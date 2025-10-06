@@ -1,26 +1,52 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>About Vybez Chat</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <title>About Kosmi Desktop</title>
     <style>
-    body { 
-        font-family: 'Archivo Black';
-        text-align: center;
-        padding: 20px; 
-        background: #1D123C;
-        background: linear-gradient(180deg, rgba(29, 18, 60, 1) 100%, rgba(39, 23, 82, 1) 0%);
-        color: white;
-        overflow: hidden;
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #2a2139;
+            color: #c8bce2;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: calc(100vh - 40px);
+            text-align: center;
+            overflow: hidden;
         }
-        </style>
+        img {
+            width: 96px;
+            height: 96px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 24px;
+            margin: 0 0 10px 0;
+            color: #fff;
+        }
+        p {
+            font-size: 14px;
+            margin: 0;
+        }
+        #version-container {
+            margin-bottom: 20px;
+        }
+    </style>
 </head>
 <body>
-    <img src="assets/icon.png" width="128"/>
+    <img src="assets/icon.png" alt="Kosmi Logo">
     <h1>Kosmi Desktop</h1>
-    <p>Version 1.1.1</p>
-    <p>Electron-based Kosmi Desktop Client.</p>
+    <p id="version-container">Version <span id="version-number">...</span></p>
+    <p>A feature-rich desktop client for Kosmi.io.</p>
+
+    <script>
+        window.aboutAPI.getAppVersion().then(version => {
+            document.getElementById('version-number').innerText = version;
+        });
+    </script>
 </body>
 </html>

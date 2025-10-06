@@ -1,46 +1,22 @@
-// preload.js
-
 const { contextBridge, ipcRenderer } = require('electron');
 
-// We can't directly replace window.Notification because of context isolation.
-// Instead, we will expose a safe API for the renderer process to use.
-// However, to intercept existing notifications from a third-party site,
-// we need a different approach. We can inject a script into the page.
+contextBridge.exposeInMainWorld('electronAPI', {
+  // From original preload script for notifications
+  showNotification: (title, options) => ipcRenderer.send('show-notification', { title, options }),
+  // NEW: For drag and drop
+  sendDroppedLink: (url) => ipcRenderer.send('dropped-link', url)
+});
 
-// Let's stick to the override method, which works better for intercepting.
-// The contextBridge is best practice, but for this specific task of
-// hijacking an existing API, direct modification is more effective,
-// assuming we manage the context correctly.
-// Let's redefine Notification on the window object.
-
-const OriginalNotification = Notification;
-
-// Create a custom Notification class that sends data to the main process.
-class CustomNotification extends OriginalNotification {
-    constructor(title, options) {
-        // Send notification data to the main process via IPC.
-        ipcRenderer.send('show-notification', { title, ...options });
-
-        // Call the original constructor to maintain some of the base functionality
-        // but we won't show it. The main process will show the native one.
-        // We will return an empty object that mimics an event target.
-        super(title, options);
-        this.addEventListener = () => {};
-        this.removeEventListener = () => {};
-        this.dispatchEvent = () => true;
-        this.close = () => {};
-    }
-
-    // You might need to mock static properties/methods if the site uses them.
-    static get permission() {
-        return OriginalNotification.permission;
-    }
-
-    static async requestPermission() {
-        return await OriginalNotification.requestPermission();
-    }
+// Override the native Notification class
+class PatchedNotification extends Notification {
+  constructor(title, options) {
+    // Send to main process to show native notification
+    ipcRenderer.send('show-notification', { title, options });
+    // Still call the original constructor to maintain other functionality
+    super(title, options);
+  }
 }
 
-// Override the global Notification object with our custom one.
-// This will intercept any attempt by the Kosmi website to create a notification.
-window.Notification = CustomNotification;
+// Replace the global Notification with our patched version
+window.Notification = PatchedNotification;
+
